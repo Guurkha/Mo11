@@ -1,0 +1,339 @@
+#include <iostream>
+#include <math.h>
+#include "calerf.h"
+#include <iomanip>
+#include <fstream>
+
+using namespace std;
+//stale
+const double D = 1.0;
+double lambdaKmb = 0.4;
+double lambdaCrankNicolson = 1.0;
+const double R = 1.0, A = 10.0;
+const double tMax = 2.0;
+//pliki do zapisania danych do wykresu
+fstream daneAnalityczny, daneDlaTmax, daneErrCrankNicolson, daneErrKmb;
+// ile poziomow czasowych dla metod
+int sizeCrankNicolson, sizeKmb, xSize;
+
+
+//dzielimy algorytm thomasa na dwie funkcje, jedna ktora dziala tylko na macierz, druga ktora dziala tez z wektorem
+//funkcje do algorytmu Thomasa
+void thomas_red(double *l, double *d, double *u) {
+    for (int i = 0; i < xSize; i++) {
+        d[i + 1] = d[i + 1] - l[i] * (u[i] / d[i]);
+        l[i] = l[i] / d[i];
+    }
+}
+
+void thomas_rozw(double *l, double *d, double *u, double *b, double *x) {
+    for (int i = 1; i < xSize; i++)
+        b[i] = b[i] - l[i - 1] * b[i - 1];
+
+    x[xSize - 1] = b[xSize - 1] / d[xSize - 1];
+    for (int i = xSize - 2; i >= 0; i--)
+        x[i] = (b[i] - u[i] * x[i + 1]) / d[i];
+}
+
+//Obliczanie wartosci analitycznych CrankNicolson
+//w sumie ta sama funkcja co wyzej
+void analityczne_CrankNicolson(double **W, double dt, double h) {
+    double tt = dt, dh;
+
+//dla jednego poziomu czasowego
+    for (int i = 1; i < sizeCrankNicolson; i++) {
+        dh = 1;
+//dla kazdego x
+        for (int j = 0; j < xSize; j++) {
+            W[i][j] = 1.0-(((double)R/(double)dh)*erfc((double)(dh-R)/(2.0*sqrt(D*tt))));
+            dh += h;
+        }
+        tt += dt;
+    }
+}
+
+//Obliczanie wartosci analitycznych KMB
+void analityczne_KMB(double **W, double dt, double h) {
+    double tt = dt, dh;
+
+//dla jednego poziomu czasowego
+    for (int i = 1; i < sizeKmb; i++) {
+        dh = 1;
+//dla kazdego x
+        for (int j = 0; j < xSize; j++) {
+            W[i][j] = 1.0-(((double)R/(double)dh)*erfc((double)(dh-R)/(2.0*sqrt(D*tt))));
+            dh += h;
+        }
+        tt += dt;
+    }
+}
+
+//funkcja dyskretyzacji
+void dyskretyzacja_CrankNicolson(double *l, double *d, double *u, double h) {
+    double dh = R + h;
+
+    d[0] = 1.0;
+    u[0] = 0.0;
+//wspolczynniki wyznaczone
+    for (int i = 1; i <= xSize - 2; i++) {
+        l[i - 1] = lambdaCrankNicolson * (0.5 - (h / dh));
+        d[i] = -(1.0 + lambdaCrankNicolson);
+        u[i] = lambdaCrankNicolson * (0.5 + h / dh);
+        dh += h;
+    }
+    d[xSize - 1] = 1.0;
+    l[xSize - 2] = 0.0;
+}
+
+//funkcja CrankNicolson liczaca to rownanie z thomasem
+void fun_CrankNicolson(double **W, double h) {
+    double *l, *d, *u, *b, *x;
+    l = new double[xSize - 1];
+    d = new double[xSize];
+    u = new double[xSize - 1];
+    b = new double[xSize];
+    x = new double[xSize];
+
+    // dla poprzedniego (znanego) poziomu czasowego
+    auto **B = new double *[xSize];
+    for (int i = 0; i < xSize; i++) B[i] = new double[xSize];
+
+    // uzupelnienie zerami
+    for (int i = 0; i < xSize; i++)
+        for (int j = 0; j < xSize; j++)
+            B[i][j] = 0;
+
+    // wektor bedacy suma wektora b z wartosciami warunkow brzegowych
+    auto *b2 = new double[xSize];
+    for (int i = 0; i < xSize; i++)
+        b2[i] = 0;
+
+    B[0][0] = 0;
+    B[xSize - 1][xSize - 1] = 0;
+
+    // uzupelnienie macierzy wspolczynnikow przy wartosciach znanych
+    for (int i = 1; i < xSize - 1; i++) {
+        B[i][i - 1] = -lambdaCrankNicolson / 2.0;
+        B[i][i] = -(1 - lambdaCrankNicolson);
+        B[i][i + 1] = -lambdaCrankNicolson / 2.0;
+    }
+
+    dyskretyzacja_CrankNicolson(l, d, u, h);
+    thomas_red(l, d, u);
+
+    for (int i = 1; i < sizeCrankNicolson; i++) {
+        for (int j = 1; j < xSize - 1; j++)
+            b[j] = W[i - 1][j];
+
+        b[0] = W[i - 1][0];
+        b[xSize - 1] = W[i - 1][xSize - 1];
+
+        // mnozenie macierzy B z wektorem b oraz dodanie wartosci warunkow brzegowych
+        double suma = 0;
+        for (int i = 0; i < xSize; i++) {
+            for (int j = 0; j < xSize; j++)
+                suma += B[i][j] * b[j];
+            b2[i] = suma;
+            suma = 0;
+        }
+        b2[0] += W[i][0];
+        b2[xSize - 1] += W[i][xSize - 1];
+
+        thomas_rozw(l, d, u, b2, x);
+        for (int k = 1; k < xSize - 1; k++)
+            W[i][k] = x[k];    //wypelnianie macierzy aktualnym poziomem czasowym
+    }
+
+    delete[] l;
+    delete[] d;
+    delete[] u;
+    delete[] x;
+    delete[] b;
+}
+
+//funkcja KMB
+void fun_KMB(double **W, double h) {
+    double dh;
+
+    for (int i = 1; i < sizeKmb; i++) {
+        dh = R + h;
+        //wzor z wykladu. 
+ //mowil ze trzeab sprawdzac od lambd mniejszych az do takich najblizszej lambdzie
+ //a im h sie zmniejsza tym lambda bedzie blizsza 1. 
+ //dla srodkowego nie robimy tak bo nie ma przejscia miedzy wezlami
+
+        for (int j = 1; j < xSize - 1; j++) {
+            W[i][j] = W[i - 1][j - 1] * lambdaKmb * (1.0 - h / dh)
+                      + W[i - 1][j] * (1.0 - (2.0 * lambdaKmb))
+                      + W[i - 1][j + 1] * lambdaKmb * (1.0 + h / dh);
+            dh += h;
+        }
+    }
+}
+
+//warunek brzegowy z tresci polecenia
+double war_prawy(double t) {
+    return 1.0 - (R / (R + A)) * (1 - erfl(A / (2.0 * sqrt(D * t))));
+}
+
+int main() {
+    daneDlaTmax.open("daneDlaTmax.txt", fstream::out);
+
+    double bladCrankNicolson, bladKmb, maxBladCrankNicolson, maxBladKmb, h = 0.5;
+
+    for (; h > 0.01; h -= 0.01) {
+
+        double dtCrankNicolson = (lambdaCrankNicolson * h * h) / D;
+        xSize = A / h;
+
+        //Dane do metod
+        double **AnalCrankNicolson, **CrankNicolson;
+
+        sizeCrankNicolson = tMax / dtCrankNicolson;
+
+        AnalCrankNicolson = new double *[sizeCrankNicolson];
+        CrankNicolson = new double *[sizeCrankNicolson];
+
+        for (int i = 0; i < sizeCrankNicolson; i++) {
+            AnalCrankNicolson[i] = new double[xSize];
+            CrankNicolson[i] = new double[xSize];
+        }
+
+        double **Analityczne_K, **KMB;
+        double dt_kmb = (lambdaKmb * h * h) / D;
+
+        sizeKmb = tMax / dt_kmb;
+
+        Analityczne_K = new double *[sizeKmb];
+        KMB = new double *[sizeKmb];
+
+        for (int i = 0; i < sizeKmb; i++) {
+            Analityczne_K[i] = new double[xSize];
+            KMB[i] = new double[xSize];
+        }
+
+        //warunek poczatkowy
+        for (int i = 0; i < xSize; i++) {
+            CrankNicolson[0][i] = 1.0;
+        }
+
+        for (int i = 0; i < xSize; i++) {
+            KMB[0][i] = 1.0;
+        }
+        //warunek brzegowy 1
+        for (int i = 1; i < sizeCrankNicolson; i++) {
+            CrankNicolson[i][0] = 0.0;
+        }
+
+        for (int i = 1; i < sizeKmb; i++) {
+            KMB[i][0] = 0.0;
+        }
+        //warunek brzegowy 2
+        double tt = dtCrankNicolson;
+        for (int i = 1; i < sizeCrankNicolson; i++) {
+            CrankNicolson[i][xSize - 1] = war_prawy(tt);
+            tt += dtCrankNicolson;
+        }
+
+        tt = dt_kmb;
+        for (int i = 1; i < sizeKmb; i++) {
+            KMB[i][xSize - 1] = war_prawy(tt);
+            tt += dt_kmb;
+        }
+
+        //wpelnienie tablic poziomami czasowymi
+        analityczne_CrankNicolson(AnalCrankNicolson, dtCrankNicolson, h);
+        fun_CrankNicolson(CrankNicolson, h);
+        analityczne_KMB(Analityczne_K, dt_kmb, h);
+        fun_KMB(KMB, h);
+
+        //dla h == 0.1 zapisuje obliczenia do wykresu i maksymalna wartosc bezwgledna bledu w funkcji czasu t
+        if (h < 0.1001 && h > 0.0999) {
+            cout << h << endl;
+            cout << endl << sizeCrankNicolson << " " << sizeKmb << endl;
+            cout << "  x   analityczne_CN        CrankN   Analityczne_K           KMB   " << endl;
+            int index = 150; //50 lub 100 lub 150
+            int index2 = index * 2 + (index/50)*25;
+            double dh = R + h;
+            string filename = "daneAnalityczny";
+            daneAnalityczny.open(filename + "daneAnalityczny" + ".txt", fstream::out);
+
+
+            for (int i = 0; i < xSize; i++) {
+                daneAnalityczny << dh << " " << AnalCrankNicolson[index][i] << " " << CrankNicolson[index][i] << " " <<
+                                Analityczne_K[index2][i] << " " << KMB[index2][i] <<  endl;
+                dh += h;
+                cout.width(4);
+                cout << dh << " ";
+                cout.width(15);
+                cout << setprecision(10) << AnalCrankNicolson[index][i] << " ";
+                cout.width(15);
+                cout << setprecision(10) << CrankNicolson[index][i] << " ";
+                cout.width(15);
+                cout << setprecision(10) << Analityczne_K[index2][i] << " ";
+                cout.width(15);
+                cout << setprecision(10) << KMB[index2][i] << " " << endl;
+            }
+            daneAnalityczny.close();
+
+            double errCrankN, errKmb, maxErrCrankN, maxErrKmb;
+
+            // daneErrCrankNicolson.open("daneErrCrankNicolson.txt", fstream::out);
+
+            // for (int i = 1; i < sizeCrankNicolson; i++) {
+            //     maxErrCrankN = 0.0;
+            //     for (int j = 0; j < xSize; j++) {
+            //         errCrankN = fabs(AnalCrankNicolson[i][j] - CrankNicolson[i][j]);
+            //         if (errCrankN > maxErrCrankN)
+            //             maxErrCrankN = errCrankN;
+            //     }
+            //     daneErrCrankNicolson << i * dtCrankNicolson << " " << maxErrCrankN << endl;
+            // }
+            // daneErrCrankNicolson.close();
+
+            daneErrKmb.open("daneErrKmb.txt", fstream::out);
+            for (int i = 1; i < sizeKmb; i++) {
+                maxErrKmb = 0.0;
+                for (int j = 0; j < xSize; j++) {
+                    errKmb = fabs(Analityczne_K[i][j] - KMB[i][j]);
+                    if (errKmb > maxErrKmb)
+                        maxErrKmb = errKmb;
+                }
+                daneErrKmb << i * dt_kmb << " " << maxErrKmb << endl;
+            }
+        }
+        maxBladCrankNicolson = 0.0;
+        maxBladKmb = 0.0;
+        //Maksymalna wartosc bezwzglednego bledu obserwacji dla tMax w funkcji kroku przestrzennnego h
+        for (int i = 0; i < xSize; i++) {
+            bladCrankNicolson = fabs(AnalCrankNicolson[sizeCrankNicolson - 1][i] - CrankNicolson[sizeCrankNicolson - 1][i]);
+            if (bladCrankNicolson > maxBladCrankNicolson)
+                maxBladCrankNicolson = bladCrankNicolson;
+
+            bladKmb = fabs(Analityczne_K[sizeKmb - 1][i] - KMB[sizeKmb - 1][i]);
+            if (bladKmb > maxBladKmb)
+                maxBladKmb = bladKmb;
+
+        }
+        daneDlaTmax << log10(h) << " " << log10(maxBladCrankNicolson) << " " << log10(maxBladKmb) << endl;
+
+        //usuwanie
+        for (int i = 0; i < sizeKmb; i++) {
+            delete[] KMB[i];
+            delete[] Analityczne_K[i];
+        }
+
+        for (int i = 0; i < sizeCrankNicolson; i++) {
+            delete[] CrankNicolson[i];
+            delete[] AnalCrankNicolson[i];
+        }
+
+        delete[] CrankNicolson;
+        delete[] AnalCrankNicolson;
+        delete[] Analityczne_K;
+        delete[] KMB;
+    }
+
+
+    return 0;
+}
