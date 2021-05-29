@@ -27,19 +27,21 @@ void analityczne_KMB(double **W, double dt, double h)
     double tt = dt;
     double dh = 0;
 
+//dla jednego poziomu czasowego
     for(int i = 1; i < sizeKmb; i++)
     {
         dh = 1;
-
+//dla kazdego x
         for(int j = 0; j < xSize; j++)
         {
-            W[i][j] = 1.0 - (R/dh) * (1-erfl((dh-R)/(2.0 * sqrt(D * tt))));
+            W[i][j] = 1.0-(((double)R/(double)dh)*erfc((double)(dh-R)/(2.0*sqrt(D*tt))));
             dh += h;
         }
         tt += dt;
     }
 }
 
+//warunek brzegowy. 
 double war_prawy(double t) {
     return 1.0 - (R / (R + A)) * (1 - erfl(A / (2.0 * sqrt(D * t))));
 }
@@ -50,7 +52,10 @@ void fun_KMB(double **W, double h) {
 
     for (int i = 1; i < sizeKmb; i++) {
         dh = R + h;
-
+//wzor z wykladu. 
+//mowil ze trzeab sprawdzac od lambd mniejszych az do takich najblizszej lambdzie
+//a im h sie zmniejsza tym lambda bedzie blizsza 1. 
+//dla srodkowego nie robimy tak bo nie ma przejscia miedzy wezlami
         for (int j = 1; j < xSize - 1; j++) {
             W[i][j] = W[i - 1][j - 1] * lambdaKmb * (1.0 - h / dh)
                       + W[i - 1][j] * (1.0 - (2.0 * lambdaKmb))
@@ -65,11 +70,13 @@ int main()
     double bladCrankNicolson, bladKmb, maxBladCrankNicolson, maxBladKmb, h = 0.5;
 
     for (; h > 0.01; h -= 0.01) {
-        
+        //liczymy ile poziomow czasowych
         xSize = A / h;
 
         double **Analityczne_K, **KMB;
         double dt_kmb = (lambdaKmb * h * h) / D;
+        //krok czasowy z wzory wziety ( lambda = h*h * dt)/D
+        //to jest ten krok dt dla kazdego 
 
         sizeKmb = tMax / dt_kmb;
 
